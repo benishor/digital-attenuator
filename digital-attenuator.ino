@@ -1,8 +1,11 @@
 #include <LiquidCrystal.h>
-#include <buttons.h>
-#include <EEPROM.h>
+#include <eBtn.h>
+
 
 /**
+ * Adrian Scripca <benishor@gmail.com>, YO6SSW
+ * Using PE4306 serial command code from Jeff Tranter <tranter@pobox.com>
+ *  
  * Pins
  * 
  * 
@@ -61,81 +64,56 @@ private:
   int latchEnablePin;
 };
 
-class MyButton {
-public:
-  MyButton(int pin);
-  int check();
-
-  enum ButtonState {
-    BUTTON_ON,
-    BUTTON_OFF,
-    BUTTON_HOLD
-  };
-  
-private:
-  int pin;
-};
-
 AttenuationUnit unit1(ATTENUATOR_DATA, ATTENUATOR_CLOCK, ATTENUATOR_LE_1);
 AttenuationUnit unit2(ATTENUATOR_DATA, ATTENUATOR_CLOCK, ATTENUATOR_LE_2);
 LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
-Button btn1;
-Button btn2;
-Button btn3;
-Button btnUp;
-Button btnDown;
+eBtn btn1 = eBtn(BUTTON_1_PIN);
+eBtn btn2 = eBtn(BUTTON_2_PIN);
+eBtn btn3 = eBtn(BUTTON_3_PIN);
+eBtn btnUp = eBtn(BUTTON_UP_PIN);
+eBtn btnDown = eBtn(BUTTON_DOWN_PIN);
 
-int attenuationDistributionMode = 0; // 0 => fully use unit1 and then unit2, 
-                                     // 1 => attempt to distribute evenly
 
 void setTotalAttenuation(int attenuationLevelInDb) {
-  int firstUnitAttenuation;
-  if (attenuationDistributionMode == 0) {
-    firstUnitAttenuation = min(attenuationLevelInDb, 31);
-  } else {
-    firstUnitAttenuation = attenuationLevelInDb / 2;
-  }
-  
+  int firstUnitAttenuation = attenuationLevelInDb / 2;
   int secondUnitAttenuation = attenuationLevelInDb - firstUnitAttenuation;
 
   unit1.setAttenuation(firstUnitAttenuation);
   unit2.setAttenuation(secondUnitAttenuation);
 }
 
+void buttonIsr() {
+  btn1.handle();
+  btn2.handle();
+  btn3.handle();
+  btnUp.handle();
+  btnDown.handle();
+}
+
 int attenuator[3];
 int currentActiveAttenuator = -1;
-
-int getCurrentAttenuation() {
-  return currentActiveAttenuator == -1 ? 0 : attenuator[currentActiveAttenuator];
-}
 
 char lcdLine[17];
 void updateDisplay() {
   lcd.setCursor(0, 0);
-  sprintf(lcdLine, "   ATTEN %2ddB", getCurrentAttenuation());
+  sprintf(lcdLine, "   ATTEN: %2ddB  ");
+  
   lcd.write(lcdLine);
-
-  memset(lcdLine, ' ', 16);
-
-  char buffer[7];
-  lcdLine[0] = 0;
+  
+  lcd.setCursor(0, 1);
   for (int i = 0; i < 3; i++) {
     if (currentActiveAttenuator == i) {
-      sprintf(buffer, "%c%ddB ", 126, attenuator[i]);
+      sprintf(lcdLine[i*5], " [%2d]", attenuator[i]);
     } else {
-      sprintf(buffer, "%ddB ", attenuator[i]);
+      sprintf(lcdLine[i*5], "  %2d ", attenuator[i]);
     }
-    strcat(lcdLine, buffer);
   }
-  strcat(lcdLine, " ");
-  lcd.setCursor(0, 1);
   lcd.write(lcdLine);
 }
 
 void updateAttenuatorsWithCurrentSettings() {
-  setTotalAttenuation(getCurrentAttenuation());
+  setTotalAttenuation(currentActiveAttenuator == -1 ? 0 : attenuator[currentActiveAttenuator]);
   updateDisplay();
-  saveSettingsToEeprom();
 }
 
 void onButton1Press() {
@@ -171,127 +149,31 @@ void onButtonDownPress() {
   }
 }
 
-void saveSettingsToEeprom() {
-  EEPROM.write(0, 1);
-  for (int i = 0; i < 3; i++) {
-    EEPROM.write(i+1, attenuator[i]);
-  }
-  EEPROM.write(4, currentActiveAttenuator+1);
-}
-
-void loadSettingsFromEeprom() {
-  byte eepromInitialized = EEPROM.read(0);
-  if (eepromInitialized > 0) {
-    for (int i = 0; i < 3; i++) {
-      attenuator[i] = EEPROM.read(i+1);
-    }
-    currentActiveAttenuator = EEPROM.read(4) - 1;
-  } else {
-    attenuator[0] = 10;
-    attenuator[1] = 20;
-    attenuator[2] = 30;
-    currentActiveAttenuator = -1;
-    saveSettingsToEeprom();
-  }
-}
 
 void setup() {
-  loadSettingsFromEeprom();
 
-  pinMode(ATTENUATOR_CLOCK, OUTPUT);
-  pinMode(ATTENUATOR_DATA, OUTPUT);
-  pinMode(ATTENUATOR_LE_1, OUTPUT);
-  pinMode(ATTENUATOR_LE_2, OUTPUT);
-
-  btn1.assign(BUTTON_1_PIN);
-  btn2.assign(BUTTON_2_PIN);
-  btn3.assign(BUTTON_3_PIN);
-  btnUp.assign(BUTTON_UP_PIN);
-  btnDown.assign(BUTTON_DOWN_PIN);
-
-  btn1.turnOnPullUp();
-  btn2.turnOnPullUp();
-  btn3.turnOnPullUp();
-  btnUp.turnOnPullUp();
-  btnDown.turnOnPullUp();
-
-  btn1.setMode(OneShot);
-  btn2.setMode(OneShot);
-  btn3.setMode(OneShot);
-
-  btnUp.setMode(OneShotTimer);
-  btnUp.setTimer(1800);
-  btnUp.setRefresh(200);
-
-  btnDown.setMode(OneShotTimer);
-  btnDown.setTimer(1800);
-  btnDown.setRefresh(200);
-
-//  btn1.begin();
-//  btn2.begin();
-//  btn3.begin();
-//  btnUp.begin();
-//  btnDown.begin();
+  attenuator[0] = 3;
+  attenuator[1] = 6;
+  attenuator[2] = 10;
+  currentActiveAttenuator = -1;
   
   lcd.begin(16, 2);
   lcd.noCursor();
-  lcd.write("helloes");
-  updateAttenuatorsWithCurrentSettings();
+
+  btn1.on("press", onButton1Press);
+  btn2.on("press", onButton2Press);
+  btn3.on("press", onButton3Press);
+  btnUp.on("press", onButtonUpPress);
+  btnDown.on("press", onButtonDownPress);
+  
+  attachInterrupt(BUTTON_1_PIN, buttonIsr, CHANGE);
+  attachInterrupt(BUTTON_2_PIN, buttonIsr, CHANGE);
+  attachInterrupt(BUTTON_3_PIN, buttonIsr, CHANGE);
+  attachInterrupt(BUTTON_UP_PIN, buttonIsr, CHANGE);
+  attachInterrupt(BUTTON_DOWN_PIN, buttonIsr, CHANGE);
 }
 
 void loop() {
-  if (btn1.check() == ON) {
-    onButton1Press();
-  }
-  if (btn2.check() == ON) {
-    onButton2Press();
-  }
-  if (btn3.check() == ON) {
-    onButton3Press();
-  }
-
-  switch (btnUp.check()) {
-    case ON:
-      onButtonUpPress();
-    break;
-    case Hold:
-      onButtonUpPress();
-    break;
-    default:
-    break;
-  }
-
-  switch (btnDown.check()) {
-    case ON:
-      onButtonDownPress();
-    break;
-    case Hold:
-      onButtonDownPress();
-    break;
-    default:
-    break;
-  }
-
-  
-//  if (btn1.toggled() && btn1.read() == Button::PRESSED) {
-//    onButton1Press();
-//  }
-//  
-//  if (btn2.toggled() && btn2.read() == Button::PRESSED) {
-//    onButton2Press();
-//  }
-//  
-//  if (btn3.toggled() && btn3.read() == Button::PRESSED) {
-//    onButton3Press();
-//  }
-//  
-//  if (btnUp.toggled() && btnUp.read() == Button::PRESSED) {
-//    onButtonUpPress();
-//  }
-//  
-//  if (btnDown.toggled() && btnDown.read() == Button::PRESSED) {
-//    onButtonDownPress();
-//  }
 }
 
 void AttenuationUnit::setAttenuation(int attenuationLevelInDb) {
@@ -319,4 +201,5 @@ void AttenuationUnit::setAttenuation(int attenuationLevelInDb) {
   digitalWrite(latchEnablePin, HIGH); // Toggle LE high to enable latch
   digitalWrite(latchEnablePin, LOW);  // and then low again to hold it.
 }
+
 
